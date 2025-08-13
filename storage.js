@@ -1,54 +1,102 @@
-// storage.js - persistência simples em arquivo JSON (users.json)
-const fs = require('fs');
-const path = require('path');
+// storage.js — persistência simples em arquivo (para testes)
+const fs = require("fs");
+const path = require("path");
 
-const DB_PATH = path.resolve(__dirname, 'users.json');
+const DATA_DIR = path.join(__dirname, "data");
+const DB_FILE = path.join(DATA_DIR, "db.json");
 
-// garante arquivo
-function ensure() {
-  if (!fs.existsSync(DB_PATH)) {
-    fs.writeFileSync(DB_PATH, JSON.stringify({ users: [] }, null, 2));
-  }
-}
-function readDB() {
-  ensure();
+// garante pasta
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// carrega/salva
+function load() {
   try {
-    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
   } catch {
-    return { users: [] };
+    return { users: {}, pending: {} }; // estrutura inicial
   }
 }
-function writeDB(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+function save() {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
+let db = load();
+
+/** ====== Funções usadas pelo BOT ====== **/
+
+// salva/atualiza dados de pagamento pendente para um chat
+function upsertPending(chatId, data) {
+  chatId = String(chatId);
+  db.pending[chatId] = { ...(db.pending[chatId] || {}), ...data };
+  save();
+}
+
+// recupera pendência do chat
+function getPending(chatId) {
+  return db.pending[String(chatId)];
+}
+
+// remove pendência do chat
+function removePending(chatId) {
+  delete db.pending[String(chatId)];
+  save();
+}
+
+// obtém dados de assinatura do usuário
+function get(chatId) {
+  return db.users[String(chatId)];
+}
+
+/** ====== Funções usadas pelo WEBHOOK (server.js) ====== **/
+
+// ativa/renova assinatura a partir do external_reference
 function activateByReference(reference, startTs, endTs) {
-  const chatId = Number(String(reference || '').split('|')[0]); // "<chatId>|P15|..."
+  // reference no formato "<chatId>|P15|<timestamp>" ou "<chatId>|P30|<timestamp>"
+  const chatId = Number(String(reference || "").split("|")[0]);
   if (!chatId) return;
 
-  const db = readDB();
-  const i = db.users.findIndex(u => u.chatId === chatId);
-  const rec = { chatId, reference, startTs, endTs };
+  db.users[String(chatId)] = {
+    chatId,
+    active: true,
+    startTs,
+    endTs,
+    reference,
+  };
 
-  if (i >= 0) db.users[i] = { ...db.users[i], ...rec };
-  else db.users.push(rec);
-
-  writeDB(db);
+  // se tinha pendência, remove
+  delete db.pending[String(chatId)];
+  save();
 }
 
-function listExpired(now = Date.now()) {
-  const db = readDB();
-  return db.users.filter(u => u.endTs && u.endTs <= now);
-}
-
+// desativa assinatura por chatId (usado ao expirar)
 function deactivateByChatId(chatId) {
-  const db = readDB();
-  db.users = db.users.filter(u => u.chatId !== Number(chatId));
-  writeDB(db);
+  chatId = String(chatId);
+  if (db.users[chatId]) {
+    db.users[chatId].active = false;
+    save();
+  }
+}
+
+// lista assinaturas expiradas (endTs <= now)
+function listExpired(now = Date.now()) {
+  const out = [];
+  for (const [id, u] of Object.entries(db.users)) {
+    if (u && u.active && u.endTs && u.endTs <= now) {
+      out.push({ chatId: Number(id), ...u });
+    }
+  }
+  return out;
 }
 
 module.exports = {
+  // usadas no bot
+  upsertPending,
+  getPending,
+  removePending,
+  get,
+
+  // usadas no webhook
   activateByReference,
-  listExpired,
   deactivateByChatId,
+  listExpired,
 };
