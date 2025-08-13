@@ -1,96 +1,54 @@
-const fs = require("fs");
-const path = require("path");
+// storage.js - persistência simples em arquivo JSON (users.json)
+const fs = require('fs');
+const path = require('path');
 
-const DB_FILE = path.join(__dirname, "users.json");
+const DB_PATH = path.resolve(__dirname, 'users.json');
 
+// garante arquivo
+function ensure() {
+  if (!fs.existsSync(DB_PATH)) {
+    fs.writeFileSync(DB_PATH, JSON.stringify({ users: [] }, null, 2));
+  }
+}
 function readDB() {
+  ensure();
   try {
-    if (!fs.existsSync(DB_FILE)) return [];
-    const txt = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(txt || "[]");
-  } catch (e) {
-    console.error("Erro ao ler DB:", e);
-    return [];
+    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+  } catch {
+    return { users: [] };
   }
 }
-
 function writeDB(data) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
-  } catch (e) {
-    console.error("Erro ao escrever DB:", e);
-  }
+  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
 }
 
-/** Salva/atualiza uma cobrança pendente */
-async function upsertPending(record) {
+function activateByReference(reference, startTs, endTs) {
+  const chatId = Number(String(reference || '').split('|')[0]); // "<chatId>|P15|..."
+  if (!chatId) return;
+
   const db = readDB();
-  const filtered = db.filter((r) => r.external_reference !== record.external_reference);
-  filtered.push(record);
-  writeDB(filtered);
+  const i = db.users.findIndex(u => u.chatId === chatId);
+  const rec = { chatId, reference, startTs, endTs };
+
+  if (i >= 0) db.users[i] = { ...db.users[i], ...rec };
+  else db.users.push(rec);
+
+  writeDB(db);
 }
 
-/** Marca como ativo após pagamento aprovado */
-async function activateByReference(external_reference, startTs, endTs) {
+function listExpired(now = Date.now()) {
   const db = readDB();
-  const idx = db.findIndex((r) => r.external_reference === external_reference);
-  if (idx >= 0) {
-    db[idx].status = "active";
-    db[idx].activatedAt = startTs;
-    db[idx].expiresAt = endTs || db[idx].expiresAt;
-    writeDB(db);
-    return db[idx];
-  }
-  return null;
+  return db.users.filter(u => u.endTs && u.endTs <= now);
 }
 
-/** Retorna todos que já venceram até nowTs */
-function listExpired(nowTs) {
-  const db = readDB();
-  return db.filter((r) => r.status === "active" && r.expiresAt && r.expiresAt <= nowTs);
-}
-
-/** Marca como expirado por chatId */
 function deactivateByChatId(chatId) {
   const db = readDB();
-  let changed = false;
-  for (const r of db) {
-    if (r.chatId === chatId && r.status === "active") {
-      r.status = "expired";
-      changed = true;
-    }
-  }
-  if (changed) writeDB(db);
-}
-
-/** Cancela imediatamente a assinatura ativa do chatId */
-function cancelByChatId(chatId) {
-  const db = readDB();
-  let changed = false;
-  for (const r of db) {
-    if (r.chatId === chatId && r.status === "active") {
-      r.status = "canceled";
-      r.expiresAt = Date.now(); // efetiva agora
-      changed = true;
-    }
-  }
-  if (changed) writeDB(db);
-  return changed;
-}
-
-/** Busca o último registro (mais recente) do usuário */
-function findLatestByChatId(chatId) {
-  const db = readDB().filter((r) => r.chatId === chatId);
-  if (!db.length) return null;
-  db.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  return db[0];
+  db.users = db.users.filter(u => u.chatId !== Number(chatId));
+  writeDB(db);
 }
 
 module.exports = {
-  upsertPending,
   activateByReference,
   listExpired,
   deactivateByChatId,
-  cancelByChatId,
-  findLatestByChatId,
 };
