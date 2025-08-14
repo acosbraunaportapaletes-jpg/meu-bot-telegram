@@ -1,4 +1,6 @@
+// bot.js
 require("dotenv").config();
+
 const fs = require("fs");
 const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
@@ -8,7 +10,9 @@ const store = require("./storage");
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// ---------- Comandos no menu "/" ----------
+/* =========================================
+   Comandos de menu ("/")
+========================================= */
 (async () => {
   try {
     await bot.setMyCommands([
@@ -24,7 +28,9 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
   }
 })();
 
-// ---------- Helpers de UI ----------
+/* =========================================
+   Helpers de UI
+========================================= */
 function planKeyboard() {
   const p15 = Number(process.env.PLAN_15_PRICE || 5.90).toFixed(2);
   const p30 = Number(process.env.PLAN_30_PRICE || 9.90).toFixed(2);
@@ -78,45 +84,50 @@ function formatRemaining(ms) {
   return parts.join(" ");
 }
 
-// ---------- Resolver do vídeo ----------
-// START_VIDEO aceita: caminho local, URL https ou file_id do Telegram
+/* =========================================
+   Vídeo de introdução
+   START_VIDEO pode ser:
+   - URL https,
+   - file_id do Telegram,
+   - caminho local (p.ex.: media/intro.mp4)
+   Se não definir START_VIDEO, tenta media/intro.mp4.
+========================================= */
 function resolveStartVideo() {
-  const raw = (process.env.START_VIDEO || "").trim();
-  if (!raw) return null;
+  let raw = (process.env.START_VIDEO || "").trim();
+  if (!raw) raw = path.resolve(__dirname, "media", "intro.mp4");
 
   // URL?
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Parece file_id? (sem / ou \ e grande)
+  // Parece um file_id? (sem / ou \)
   if (!raw.includes("/") && !raw.includes("\\")) return raw;
 
-  // Caminho local (resolve relativo ao arquivo)
+  // Caminho local (resolve relativo)
   const abs = path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw);
   if (!fs.existsSync(abs)) {
     console.warn("Arquivo de vídeo não encontrado:", abs);
     return { missing: abs };
   }
-  // Stream ajuda no Windows
   return fs.createReadStream(abs);
 }
 
-// ---------- /start & /planos ----------
 async function sendStart(chatId) {
   try {
     const videoInput = resolveStartVideo();
+
     if (videoInput) {
       if (typeof videoInput === "object" && videoInput.missing) {
         await bot.sendMessage(
           chatId,
-          "⚠️ Vídeo de introdução não encontrado. Verifique o caminho no `.env` (START_VIDEO).",
+          "⚠️ Vídeo de introdução não encontrado. Verifique START_VIDEO ou coloque `media/intro.mp4`.",
           { parse_mode: "Markdown" }
         );
       } else {
         try {
-          const sent = await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
+          await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
           // console.log("VIDEO_FILE_ID:", sent.video?.file_id);
         } catch (e) {
-          console.warn("Falha ao enviar vídeo do /start:", e.response?.data || e.message);
+          console.warn("Falha ao enviar vídeo do /start:", e?.response?.data || e?.message);
         }
       }
     }
@@ -131,14 +142,16 @@ async function sendStart(chatId) {
   }
 }
 
+/* =========================================
+   Handlers básicos
+========================================= */
 bot.onText(/\/start|\/planos/, (msg) => sendStart(msg.chat.id));
 
-// ---------- /videotest ----------
 bot.onText(/\/videotest/, async (msg) => {
   const chatId = msg.chat.id;
   const videoInput = resolveStartVideo();
   if (!videoInput) {
-    return bot.sendMessage(chatId, "ℹ️ START_VIDEO não está configurado no .env.");
+    return bot.sendMessage(chatId, "ℹ️ START_VIDEO não está configurado no .env e `media/intro.mp4` não foi encontrado.");
   }
   if (typeof videoInput === "object" && videoInput.missing) {
     return bot.sendMessage(chatId, `⚠️ Vídeo não encontrado em:\n\`${videoInput.missing}\``, {
@@ -150,18 +163,18 @@ bot.onText(/\/videotest/, async (msg) => {
     await bot.sendMessage(
       chatId,
       "✅ Vídeo enviado! Se quiser agilizar próximas vezes, use este *file_id* no .env:\n\n" +
-        "`START_VIDEO=" +
-        (sent.video?.file_id || "N/A") +
-        "`",
+        "`START_VIDEO=" + (sent.video?.file_id || "N/A") + "`",
       { parse_mode: "Markdown" }
     );
   } catch (e) {
     bot.sendMessage(chatId, "❌ Não consegui enviar o vídeo. Veja os logs.");
-    console.error("Erro no /videotest:", e.response?.data || e.message);
+    console.error("Erro no /videotest:", e?.response?.data || e?.message);
   }
 });
 
-// ---------- /status ----------
+/* =========================================
+   /status
+========================================= */
 bot.onText(/\/status/, async (msg) => {
   const chatId = msg.chat.id;
   try {
@@ -199,7 +212,9 @@ bot.onText(/\/status/, async (msg) => {
   }
 });
 
-// ---------- /cancelar ----------
+/* =========================================
+   /cancelar
+========================================= */
 bot.onText(/\/cancelar|\/cancel/, async (msg) => {
   const chatId = msg.chat.id;
   const groupId = process.env.TELEGRAM_CHANNEL_ID;
@@ -226,7 +241,7 @@ bot.onText(/\/cancelar|\/cancel/, async (msg) => {
           { chat_id: groupId, user_id: chatId }
         );
       } catch (e) {
-        console.warn("Falha ao remover do canal no cancelamento:", e.response?.data || e.message);
+        console.warn("Falha ao remover do canal no cancelamento:", e?.response?.data || e?.message);
       }
     }
 
@@ -241,7 +256,9 @@ bot.onText(/\/cancelar|\/cancel/, async (msg) => {
   }
 });
 
-// ---------- Compra (callback dos botões) ----------
+/* =========================================
+   Compra (callback dos botões)
+========================================= */
 bot.on("callback_query", async (query) => {
   try {
     const chatId = query.message.chat.id;
@@ -251,8 +268,8 @@ bot.on("callback_query", async (query) => {
     const planDays = data.split(":")[1] === "15" ? 15 : 30;
     const amount =
       planDays === 15
-        ? parseFloat(process.env.PLAN_15_PRICE || 5.90)
-        : parseFloat(process.env.PLAN_30_PRICE || 9.90);
+        ? Number(process.env.PLAN_15_PRICE || 5.90)
+        : Number(process.env.PLAN_30_PRICE || 9.90);
 
     const reference = `${chatId}|P${planDays}|${Date.now()}`;
     const expiresAt = Date.now() + planDays * 24 * 60 * 60 * 1000;
@@ -269,19 +286,31 @@ bot.on("callback_query", async (query) => {
       createdAt: Date.now(),
     });
 
+    // 1) Envia o QR (APENAS 1x)
     const qrBuffer = Buffer.from(qr_code_base64, "base64");
     await bot.sendPhoto(chatId, qrBuffer, {
       caption: `📲 Escaneie o QR Code para pagar via Pix.\nPlano: ${planDays} dias (R$ ${amount.toFixed(2)})`,
     });
-    await bot.sendMessage(
-      chatId,
-      `💳 Ou copie e cole este código no seu app bancário:\n\n\`${qr_code}\``,
-      { parse_mode: "Markdown" }
-    );
+
+    // 2) Texto explicativo separado
+    await bot.sendMessage(chatId, "💳 Ou copie e cole este código no seu app bancário:");
+
+    // 3) Payload sozinho em bloco de código (MarkdownV2)
+    const payload = (qr_code || "").trim();
+    await bot.sendMessage(chatId, "```\n" + payload + "\n```", {
+      parse_mode: "MarkdownV2",
+      disable_web_page_preview: true,
+    });
+
+    // (Opcional) mandar também como arquivo .txt:
+    // await bot.sendDocument(chatId, Buffer.from(payload, "utf8"), {
+    //   filename: `pix-${planDays}d.txt`,
+    //   caption: "Arquivo com o código 'copia e cola'.",
+    // });
 
     await bot.answerCallbackQuery(query.id, { text: "Cobrança gerada!" });
   } catch (err) {
-    console.error("Erro no callback buy:", err.response?.data || err);
+    console.error("Erro no callback buy:", err?.response?.data || err);
     await bot.answerCallbackQuery(query.id, {
       text: "Erro ao gerar Pix. Tente novamente.",
       show_alert: true,
@@ -289,7 +318,9 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-// ---------- /idcanal (descobrir ID numérico do canal) ----------
+/* =========================================
+   /idcanal + detector de forward de canal
+========================================= */
 bot.onText(/\/idcanal/, async (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -298,7 +329,6 @@ bot.onText(/\/idcanal/, async (msg) => {
   );
 });
 
-// Quando você encaminha uma mensagem do canal, o Telegram manda o forward_from_chat
 bot.on("message", (msg) => {
   if (msg.forward_from_chat && msg.forward_from_chat.type === "channel") {
     const channelId = msg.forward_from_chat.id; // tipo: -100xxxxxxxxxx
