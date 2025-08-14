@@ -26,8 +26,8 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 // ---------- Helpers de UI ----------
 function planKeyboard() {
-  const p15 = Number(process.env.PLAN_15_PRICE || 19.90).toFixed(2);
-  const p30 = Number(process.env.PLAN_30_PRICE || 29.90).toFixed(2);
+  const p15 = Number(process.env.PLAN_15_PRICE || 5.90).toFixed(2);
+  const p30 = Number(process.env.PLAN_30_PRICE || 9.90).toFixed(2);
   return {
     inline_keyboard: [
       [{ text: `🔥 Plano 15 dias — R$ ${p15}`, callback_data: "buy:15" }],
@@ -41,8 +41,8 @@ function startMessage() {
     "😈⚡️🔥 *Tenha acesso ao nosso VIP em um só lugar.*",
     "",
     "🟢 *PLANOS*",
-    "- 🔥 *15 dias — R$ 19,90*",
-    "- ⭐ *30 dias — R$ 29,90*",
+    "- 🔥 *15 dias — R$ 5,90*",
+    "- ⭐ *30 dias — R$ 9,90*",
     "",
     "📦 *Você terá acesso a:*",
     "✅ Conteúdos completos de Famosas (Pr1v4cy e @nlyf4n$",
@@ -251,8 +251,8 @@ bot.on("callback_query", async (query) => {
     const planDays = data.split(":")[1] === "15" ? 15 : 30;
     const amount =
       planDays === 15
-        ? parseFloat(process.env.PLAN_15_PRICE || 19.90)
-        : parseFloat(process.env.PLAN_30_PRICE || 29.90);
+        ? parseFloat(process.env.PLAN_15_PRICE || 5.90)
+        : parseFloat(process.env.PLAN_30_PRICE || 9.90);
 
     const reference = `${chatId}|P${planDays}|${Date.now()}`;
     const expiresAt = Date.now() + planDays * 24 * 60 * 60 * 1000;
