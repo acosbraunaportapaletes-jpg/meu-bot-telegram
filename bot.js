@@ -121,20 +121,14 @@ function resolveStartVideo() {
   return fs.createReadStream(abs);
 }
 
+/* =========================================
+   /start e /planos
+   -> /start envia VÍDEO -> IMAGEM -> MENSAGEM
+   -> /planos envia VÍDEO -> MENSAGEM (sem imagem)
+========================================= */
 async function sendStart(chatId, { withImage = false } = {}) {
   try {
-    // 0) Envia a IMAGEM do banner se solicitado (apenas no /start)
-    if (withImage && HAS_START_IMAGE) {
-      try {
-        await bot.sendPhoto(chatId, START_IMAGE_PATH, {
-          caption: START_IMAGE_CAPTION,
-        });
-      } catch (e) {
-        console.warn("Falha ao enviar imagem do /start:", e?.response?.data || e?.message);
-      }
-    }
-
-    // 1) Vídeo de introdução (opcional)
+    // 1) VÍDEO primeiro
     const videoInput = resolveStartVideo();
     if (videoInput) {
       if (typeof videoInput === "object" && videoInput.missing) {
@@ -146,14 +140,24 @@ async function sendStart(chatId, { withImage = false } = {}) {
       } else {
         try {
           await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
-          // console.log("VIDEO_FILE_ID:", sent.video?.file_id);
         } catch (e) {
           console.warn("Falha ao enviar vídeo do /start:", e?.response?.data || e?.message);
         }
       }
     }
 
-    // 2) Mensagem com planos
+    // 2) IMAGEM depois do vídeo (apenas no /start)
+    if (withImage && HAS_START_IMAGE) {
+      try {
+        await bot.sendPhoto(chatId, START_IMAGE_PATH, {
+          caption: START_IMAGE_CAPTION,
+        });
+      } catch (e) {
+        console.warn("Falha ao enviar imagem do /start:", e?.response?.data || e?.message);
+      }
+    }
+
+    // 3) Mensagem com os planos
     await bot.sendMessage(chatId, startMessage(), {
       reply_markup: planKeyboard(),
       parse_mode: "Markdown",
@@ -164,14 +168,13 @@ async function sendStart(chatId, { withImage = false } = {}) {
   }
 }
 
-/* =========================================
-   Handlers básicos
-   -> /start envia IMAGEM + vídeo + mensagem
-   -> /planos envia apenas vídeo + mensagem (sem imagem)
-========================================= */
-bot.onText(/\/start$/, (msg) => sendStart(msg.chat.id, { withImage: true }));
-bot.onText(/\/planos$/, (msg) => sendStart(msg.chat.id, { withImage: false }));
+// aceita /start com ou sem payload (ex.: /start 123)
+bot.onText(/^\/start/, (msg) => sendStart(msg.chat.id, { withImage: true }));
+bot.onText(/^\/planos$/, (msg) => sendStart(msg.chat.id, { withImage: false }));
 
+/* =========================================
+   /videotest
+========================================= */
 bot.onText(/\/videotest/, async (msg) => {
   const chatId = msg.chat.id;
   const videoInput = resolveStartVideo();
@@ -326,12 +329,6 @@ bot.on("callback_query", async (query) => {
       parse_mode: "MarkdownV2",
       disable_web_page_preview: true,
     });
-
-    // (Opcional) mandar também como arquivo .txt:
-    // await bot.sendDocument(chatId, Buffer.from(payload, "utf8"), {
-    //   filename: `pix-${planDays}d.txt`,
-    //   caption: "Arquivo com o código 'copia e cola'.",
-    // });
 
     await bot.answerCallbackQuery(query.id, { text: "Cobrança gerada!" });
   } catch (err) {
