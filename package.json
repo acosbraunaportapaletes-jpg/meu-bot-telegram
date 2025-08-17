@@ -1,12 +1,11 @@
 {
   "name": "meu-bot-telegram",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "main": "server.js",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node server.js",
-    "bot": "node bot.js",
     "start:server": "node server.js",
     "start:bot": "node bot.js"
   },
