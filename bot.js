@@ -7,12 +7,12 @@ const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 const gerarPix = require("./gerarPixMercadoPago");
 const store = require("./storage");
+const cron = require("node-cron");
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 /* =========================================
    IMAGEM DO /start
-   Usa media/picture.png (repo) com legenda opcional START_IMAGE_CAPTION
 ========================================= */
 const START_IMAGE_PATH = path.join(__dirname, "media", "picture.png");
 const HAS_START_IMAGE = fs.existsSync(START_IMAGE_PATH);
@@ -57,8 +57,8 @@ function startMessage() {
     "😈⚡️🔥 *Tenha acesso ao nosso VIP em um só lugar.*",
     "",
     "🟢 *PLANOS*",
-    "- 🔥 *15 dias — R$ 5,90*",
-    "- ⭐ *30 dias — R$ 9,90*",
+    `- 🔥 *15 dias — R$ ${Number(process.env.PLAN_15_PRICE || 5.90).toFixed(2)}*`,
+    `- ⭐ *30 dias — R$ ${Number(process.env.PLAN_30_PRICE || 9.90).toFixed(2)}*`,
     "",
     "📦 *Você terá acesso a:*",
     "✅ Conteúdos completos de Famosas (Pr1v4cy e @nlyf4n$",
@@ -76,7 +76,7 @@ function startMessage() {
     "💳 *Como pagar:*",
     "Escolha um dos planos abaixo para *gerar o Pix* (QR Code + Copia e Cola).",
     "",
-    "⚠️ *Apenas para maiores de 18 anos.* Nada de conteúdo ilegal ou não consensual.",
+    "⚠️ *Apenas para maiores de 18 anos.*",
   ];
   return lines.join("\n");
 }
@@ -95,24 +95,13 @@ function formatRemaining(ms) {
 }
 
 /* =========================================
-   Vídeo de introdução
-   START_VIDEO pode ser:
-   - URL https,
-   - file_id do Telegram,
-   - caminho local (p.ex.: media/intro.mp4)
-   Se não definir START_VIDEO, tenta media/intro.mp4.
+   Vídeo de introdução do /start
 ========================================= */
 function resolveStartVideo() {
   let raw = (process.env.START_VIDEO || "").trim();
   if (!raw) raw = path.resolve(__dirname, "media", "intro.mp4");
-
-  // URL?
-  if (/^https?:\/\//i.test(raw)) return raw;
-
-  // Parece um file_id? (sem / ou \)
-  if (!raw.includes("/") && !raw.includes("\\")) return raw;
-
-  // Caminho local (resolve relativo)
+  if (/^https?:\/\//i.test(raw)) return raw;        // URL
+  if (!raw.includes("/") && !raw.includes("\\")) return raw; // file_id
   const abs = path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw);
   if (!fs.existsSync(abs)) {
     console.warn("Arquivo de vídeo não encontrado:", abs);
@@ -123,12 +112,12 @@ function resolveStartVideo() {
 
 /* =========================================
    /start e /planos
-   -> /start envia VÍDEO -> IMAGEM -> MENSAGEM
-   -> /planos envia VÍDEO -> MENSAGEM (sem imagem)
+   -> /start: VÍDEO -> IMAGEM -> MENSAGEM
+   -> /planos: VÍDEO -> MENSAGEM
 ========================================= */
 async function sendStart(chatId, { withImage = false } = {}) {
   try {
-    // 1) VÍDEO primeiro
+    // 1) VÍDEO
     const videoInput = resolveStartVideo();
     if (videoInput) {
       if (typeof videoInput === "object" && videoInput.missing) {
@@ -138,26 +127,21 @@ async function sendStart(chatId, { withImage = false } = {}) {
           { parse_mode: "Markdown" }
         );
       } else {
-        try {
-          await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
-        } catch (e) {
-          console.warn("Falha ao enviar vídeo do /start:", e?.response?.data || e?.message);
-        }
+        try { await bot.sendVideo(chatId, videoInput, { supports_streaming: true }); }
+        catch (e) { console.warn("Falha ao enviar vídeo do /start:", e?.response?.data || e?.message); }
       }
     }
 
-    // 2) IMAGEM depois do vídeo (apenas no /start)
+    // 2) IMAGEM (apenas /start)
     if (withImage && HAS_START_IMAGE) {
       try {
-        await bot.sendPhoto(chatId, START_IMAGE_PATH, {
-          caption: START_IMAGE_CAPTION,
-        });
+        await bot.sendPhoto(chatId, START_IMAGE_PATH, { caption: START_IMAGE_CAPTION });
       } catch (e) {
         console.warn("Falha ao enviar imagem do /start:", e?.response?.data || e?.message);
       }
     }
 
-    // 3) Mensagem com os planos
+    // 3) TEXTO + BOTÕES
     await bot.sendMessage(chatId, startMessage(), {
       reply_markup: planKeyboard(),
       parse_mode: "Markdown",
@@ -168,7 +152,7 @@ async function sendStart(chatId, { withImage = false } = {}) {
   }
 }
 
-// aceita /start com ou sem payload (ex.: /start 123)
+// aceita /start com ou sem payload
 bot.onText(/^\/start/, (msg) => sendStart(msg.chat.id, { withImage: true }));
 bot.onText(/^\/planos$/, (msg) => sendStart(msg.chat.id, { withImage: false }));
 
@@ -182,15 +166,13 @@ bot.onText(/\/videotest/, async (msg) => {
     return bot.sendMessage(chatId, "ℹ️ START_VIDEO não está configurado no .env e `media/intro.mp4` não foi encontrado.");
   }
   if (typeof videoInput === "object" && videoInput.missing) {
-    return bot.sendMessage(chatId, `⚠️ Vídeo não encontrado em:\n\`${videoInput.missing}\``, {
-      parse_mode: "Markdown",
-    });
+    return bot.sendMessage(chatId, `⚠️ Vídeo não encontrado em:\n\`${videoInput.missing}\``, { parse_mode: "Markdown" });
   }
   try {
     const sent = await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
     await bot.sendMessage(
       chatId,
-      "✅ Vídeo enviado! Se quiser agilizar próximas vezes, use este *file_id* no .env:\n\n" +
+      "✅ Vídeo enviado! Para agilizar próximas vezes, use este *file_id* no .env:\n\n" +
         "`START_VIDEO=" + (sent.video?.file_id || "N/A") + "`",
       { parse_mode: "Markdown" }
     );
@@ -208,10 +190,7 @@ bot.onText(/\/status/, async (msg) => {
   try {
     const rec = await store.findLatestByChatId(chatId);
     if (!rec) {
-      return bot.sendMessage(
-        chatId,
-        "ℹ️ Você ainda não tem assinatura.\nEnvie /planos para escolher um plano e gerar seu Pix."
-      );
+      return bot.sendMessage(chatId, "ℹ️ Você ainda não tem assinatura.\nEnvie /planos para escolher um plano e gerar seu Pix.");
     }
     if (rec.status === "active") {
       const rest = rec.expiresAt - Date.now();
@@ -223,17 +202,9 @@ bot.onText(/\/status/, async (msg) => {
       );
     }
     if (rec.status === "pending") {
-      return bot.sendMessage(
-        chatId,
-        "⏳ Seu pagamento está *pendente* de confirmação. Assim que for aprovado, você receberá o link do VIP.",
-        { parse_mode: "Markdown" }
-      );
+      return bot.sendMessage(chatId, "⏳ Seu pagamento está *pendente* de confirmação. Assim que for aprovado, você receberá o link do VIP.", { parse_mode: "Markdown" });
     }
-    return bot.sendMessage(
-      chatId,
-      "⛔ Sua assinatura *expirou* ou foi *cancelada*. Para continuar, escolha um plano em /planos.",
-      { parse_mode: "Markdown" }
-    );
+    return bot.sendMessage(chatId, "⛔ Sua assinatura *expirou* ou foi *cancelada*. Para continuar, escolha um plano em /planos.", { parse_mode: "Markdown" });
   } catch (e) {
     console.error("Erro no /status:", e);
     bot.sendMessage(chatId, "❌ Não consegui consultar sua assinatura agora. Tente novamente.");
@@ -249,35 +220,23 @@ bot.onText(/\/cancelar|\/cancel/, async (msg) => {
   try {
     const rec = await store.findLatestByChatId(chatId);
     if (!rec || rec.status !== "active") {
-      return bot.sendMessage(chatId, "ℹ️ Você não possui assinatura *ativa* para cancelar.", {
-        parse_mode: "Markdown",
-      });
+      return bot.sendMessage(chatId, "ℹ️ Você não possui assinatura *ativa* para cancelar.", { parse_mode: "Markdown" });
     }
 
-    // Marca como cancelado
     store.cancelByChatId(chatId);
 
-    // Remove do canal/grupo (ban + unban para permitir voltar futuramente)
     if (groupId) {
       try {
-        await axios.post(
-          `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/banChatMember`,
-          { chat_id: groupId, user_id: chatId, revoke_messages: true }
-        );
-        await axios.post(
-          `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/unbanChatMember`,
-          { chat_id: groupId, user_id: chatId }
-        );
+        await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/banChatMember`,
+          { chat_id: groupId, user_id: chatId, revoke_messages: true });
+        await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/unbanChatMember`,
+          { chat_id: groupId, user_id: chatId });
       } catch (e) {
         console.warn("Falha ao remover do canal no cancelamento:", e?.response?.data || e?.message);
       }
     }
 
-    await bot.sendMessage(
-      chatId,
-      "✅ Sua assinatura foi *cancelada* e o acesso ao VIP foi removido.\nSe quiser voltar, é só escolher um plano em /planos.",
-      { parse_mode: "Markdown" }
-    );
+    await bot.sendMessage(chatId, "✅ Sua assinatura foi *cancelada* e o acesso ao VIP foi removido.\nSe quiser voltar, é só escolher um plano em /planos.", { parse_mode: "Markdown" });
   } catch (e) {
     console.error("Erro no /cancelar:", e);
     bot.sendMessage(chatId, "❌ Não consegui cancelar agora. Tente novamente em instantes.");
@@ -314,16 +273,12 @@ bot.on("callback_query", async (query) => {
       createdAt: Date.now(),
     });
 
-    // 1) Envia o QR (APENAS 1x)
     const qrBuffer = Buffer.from(qr_code_base64, "base64");
     await bot.sendPhoto(chatId, qrBuffer, {
       caption: `📲 Escaneie o QR Code para pagar via Pix.\nPlano: ${planDays} dias (R$ ${amount.toFixed(2)})`,
     });
 
-    // 2) Texto explicativo separado
     await bot.sendMessage(chatId, "💳 Ou copie e cole este código no seu app bancário:");
-
-    // 3) Payload sozinho em bloco de código (MarkdownV2)
     const payload = (qr_code || "").trim();
     await bot.sendMessage(chatId, "```\n" + payload + "\n```", {
       parse_mode: "MarkdownV2",
@@ -333,16 +288,31 @@ bot.on("callback_query", async (query) => {
     await bot.answerCallbackQuery(query.id, { text: "Cobrança gerada!" });
   } catch (err) {
     console.error("Erro no callback buy:", err?.response?.data || err);
-    await bot.answerCallbackQuery(query.id, {
-      text: "Erro ao gerar Pix. Tente novamente.",
-      show_alert: true,
-    });
+    await bot.answerCallbackQuery(query.id, { text: "Erro ao gerar Pix. Tente novamente.", show_alert: true });
   }
 });
 
 /* =========================================
    /idcanal + detector de forward de canal
+   + Captura de recipients para broadcast
 ========================================= */
+const RECIP_PATH = path.join(__dirname, "recipients.json");
+function readRecipients() {
+  try { return JSON.parse(fs.readFileSync(RECIP_PATH, "utf-8")); }
+  catch { return { chat_ids: [] }; }
+}
+function saveRecipients(data) {
+  const uniq = [...new Set(data.chat_ids)];
+  fs.writeFileSync(RECIP_PATH, JSON.stringify({ chat_ids: uniq }, null, 2));
+}
+function touchRecipient(chatId) {
+  const data = readRecipients();
+  if (!data.chat_ids.includes(chatId)) {
+    data.chat_ids.push(chatId);
+    saveRecipients(data);
+  }
+}
+
 bot.onText(/\/idcanal/, async (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -352,8 +322,10 @@ bot.onText(/\/idcanal/, async (msg) => {
 });
 
 bot.on("message", (msg) => {
+  if (msg && msg.chat && msg.chat.id) touchRecipient(msg.chat.id);
+
   if (msg.forward_from_chat && msg.forward_from_chat.type === "channel") {
-    const channelId = msg.forward_from_chat.id; // tipo: -100xxxxxxxxxx
+    const channelId = msg.forward_from_chat.id;
     bot.sendMessage(
       msg.chat.id,
       `✅ ID do canal detectado:\n\`${channelId}\`\n\nColoque isso no .env como TELEGRAM_CHANNEL_ID e reinicie o bot.`,
@@ -361,5 +333,70 @@ bot.on("message", (msg) => {
     );
   }
 });
+
+/* =========================================
+   BROADCAST DIÁRIO (18h TARDE, 22h NOITE)
+========================================= */
+const DOW = ["DOMINGO","SEGUNDA","TERÇA","QUARTA","QUINTA","SEXTA","SABADO"];
+
+function mediaPathFor(dayName, period /* "TARDE"|"NOITE" */) {
+  // Usa exatamente os nomes dos arquivos no repo:
+  return path.join(__dirname, "media", `${dayName} ${period}.mp4`);
+}
+
+const CAPTIONS = {
+  "SEGUNDA_TARDE": "🎬 Segunda 18h — Teaser VIP do dia: Tia deixou os pr1mos sozinhos e eles não se aguentaram se pegaram no banho sem cam1s1nha. 😉",
+  "SEGUNDA_NOITE": "🌙 Segunda 22h — T1o viu sobr1nha se tr0cando e não se aguentou. 🔥",
+  "TERÇA_TARDE":   "🎬 Terça 18h — Foi chamar o amigo pra jogar e acabou comendo a namorada dele no pelo. ✨",
+  "TERÇA_NOITE":   "🌙 Terça 22h — Edição noturna: Pr1mos foram assistir filme e a pr1ma curiosa achou o que queria. 😈",
+  "QUARTA_TARDE":  "🎬 Quarta 18h — Aquecimento da metade da semana. 💫",
+  "QUARTA_NOITE":  "🌙 Quarta 22h — Noite VIP: Aluna realiza sonho do am1go que era tranz@r na sala  de aula. 💥",
+  "QUINTA_TARDE":  "🎬 Quinta 18h — Pr1m1nha mostrando pro pr1mo que perdeu o cabac1nho. ⚡",
+  "QUINTA_NOITE":  "🌙 Quinta 22h — Esquenta do VIP: T1a foi no mercado e deixou os dois pr1mos sozinhos não teve outra foi Jorrada dentro. 🔥",
+  "SEXTA_TARDE":   "🎬 Sexta 18h — Começou o fds: Sobr1nha mostrando para o t1o o que aprendeu a fazer. 🥳",
+  "SEXTA_NOITE":   "🌙 Sexta 22h — Noite oficial: Depois de um dia trabalhando pr1minha vem deixar o pr1mo calminho. 😏",
+  "SABADO_TARDE":  "🎬 Sábado 18h — Tarde VIP: T1o vê a sobr1nha moscando não pensa duas vezes é no fundo sem choro. 🚀",
+  "SABADO_NOITE":  "🌙 Sábado 22h — Comeu aluna no banheiro da quadra sem cam1s1nha. 👑",
+  "DOMINGO_TARDE": "🎬 Domingo 18h — Pr1ma não queriar perder o cabac1nho então foi na portinha de trás. 🧩",
+  "DOMINGO_NOITE": "🌙 Domingo 22h — Último drop da semana: Pr1m1nha 1nocente tomou banho e ja recebeu o le1te. 🛋️",
+};
+
+async function broadcastFile(filePath, caption) {
+  const { chat_ids } = readRecipients();
+  if (!chat_ids.length) return;
+  for (const id of chat_ids) {
+    try {
+      await bot.sendVideo(id, fs.createReadStream(filePath), {
+        caption,
+        supports_streaming: true,
+      });
+    } catch (e) {
+      console.warn("Falha ao enviar para", id, e?.response?.data || e?.message);
+    }
+    await new Promise(r => setTimeout(r, 350)); // rate limit básico
+  }
+}
+
+async function runScheduled(period /* "TARDE"|"NOITE" */) {
+  const now = new Date();
+  const dayName = DOW[now.getDay()]; // 0=DOMINGO...6=SABADO
+  const file = mediaPathFor(dayName, period);
+  if (!fs.existsSync(file)) {
+    console.warn("Arquivo não encontrado para", dayName, period, "->", file);
+    return;
+  }
+  const key = `${dayName}_${period}`;
+  const caption = CAPTIONS[key] || `🎥 VIP ${dayName} ${period}`;
+  await broadcastFile(file, caption);
+}
+
+// Agendas (timezone Brasil)
+const tz = process.env.TZ || "America/Sao_Paulo";
+cron.schedule("0 18 * * *", () => runScheduled("TARDE"), { timezone: tz });
+cron.schedule("0 22 * * *", () => runScheduled("NOITE"), { timezone: tz });
+
+// Comandos manuais de teste
+bot.onText(/^\/broadcast_tarde$/, async (msg) => { if (msg.chat.id) await runScheduled("TARDE"); });
+bot.onText(/^\/broadcast_noite$/, async (msg) => { if (msg.chat.id) await runScheduled("NOITE"); });
 
 module.exports = bot;
