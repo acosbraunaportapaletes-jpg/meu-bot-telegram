@@ -11,8 +11,8 @@ const cron = require("node-cron");
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// loga fuso/horário no boot (confira nos Logs do Render)
-console.log(`[Boot] TZ=${process.env.TZ || 'UNSET'} | now=${new Date().toString()}`);
+// Log de fuso/horário no boot (confira nos Logs do Render)
+console.log(`[Boot] TZ=${process.env.TZ || "UNSET"} | now=${new Date().toString()}`);
 
 // ===== Cooldown (respiro) por usuário: default 3h, pode mudar com env MIN_GAP_MS =====
 const MIN_GAP_MS = Number(process.env.MIN_GAP_MS || 3 * 60 * 60 * 1000);
@@ -32,12 +32,12 @@ const START_IMAGE_CAPTION =
 (async () => {
   try {
     await bot.setMyCommands([
-      { command: "start",    description: "Ver vídeo, planos e gerar Pix" },
-      { command: "planos",   description: "Ver planos disponíveis" },
-      { command: "status",   description: "Consultar sua assinatura" },
+      { command: "start", description: "Ver vídeo, planos e gerar Pix" },
+      { command: "planos", description: "Ver planos disponíveis" },
+      { command: "status", description: "Consultar sua assinatura" },
       { command: "cancelar", description: "Cancelar sua assinatura agora" },
-      { command: "videotest",description: "Testar envio do vídeo do /start" },
-      { command: "idcanal",  description: "Descobrir o ID numérico do canal" }
+      { command: "videotest", description: "Testar envio do vídeo do /start" },
+      { command: "idcanal", description: "Descobrir o ID numérico do canal" },
     ]);
   } catch (e) {
     console.warn("Falha ao registrar comandos:", e.message);
@@ -106,7 +106,7 @@ function formatRemaining(ms) {
 function resolveStartVideo() {
   let raw = (process.env.START_VIDEO || "").trim();
   if (!raw) raw = path.resolve(__dirname, "media", "intro.mp4");
-  if (/^https?:\/\//i.test(raw)) return raw;        // URL
+  if (/^https?:\/\//i.test(raw)) return raw; // URL
   if (!raw.includes("/") && !raw.includes("\\")) return raw; // file_id
   const abs = path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw);
   if (!fs.existsSync(abs)) {
@@ -133,8 +133,11 @@ async function sendStart(chatId, { withImage = false } = {}) {
           { parse_mode: "Markdown" }
         );
       } else {
-        try { await bot.sendVideo(chatId, videoInput, { supports_streaming: true }); }
-        catch (e) { console.warn("Falha ao enviar vídeo do /start:", e?.response?.data || e?.message); }
+        try {
+          await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
+        } catch (e) {
+          console.warn("Falha ao enviar vídeo do /start:", e?.response?.data || e?.message);
+        }
       }
     }
 
@@ -169,17 +172,24 @@ bot.onText(/\/videotest/, async (msg) => {
   const chatId = msg.chat.id;
   const videoInput = resolveStartVideo();
   if (!videoInput) {
-    return bot.sendMessage(chatId, "ℹ️ START_VIDEO não está configurado no .env e `media/intro.mp4` não foi encontrado.");
+    return bot.sendMessage(
+      chatId,
+      "ℹ️ START_VIDEO não está configurado no .env e `media/intro.mp4` não foi encontrado."
+    );
   }
   if (typeof videoInput === "object" && videoInput.missing) {
-    return bot.sendMessage(chatId, `⚠️ Vídeo não encontrado em:\n\`${videoInput.missing}\``, { parse_mode: "Markdown" });
+    return bot.sendMessage(chatId, `⚠️ Vídeo não encontrado em:\n\`${videoInput.missing}\``, {
+      parse_mode: "Markdown",
+    });
   }
   try {
     const sent = await bot.sendVideo(chatId, videoInput, { supports_streaming: true });
     await bot.sendMessage(
       chatId,
       "✅ Vídeo enviado! Para agilizar próximas vezes, use este *file_id* no .env:\n\n" +
-        "`START_VIDEO=" + (sent.video?.file_id || "N/A") + "`",
+        "`START_VIDEO=" +
+        (sent.video?.file_id || "N/A") +
+        "`",
       { parse_mode: "Markdown" }
     );
   } catch (e) {
@@ -189,28 +199,37 @@ bot.onText(/\/videotest/, async (msg) => {
 });
 
 /* =========================================
-   /status
+   /status  (AGORA usando storage.js real)
 ========================================= */
 bot.onText(/\/status/, async (msg) => {
   const chatId = msg.chat.id;
   try {
-    const rec = await store.findLatestByChatId(chatId);
-    if (!rec) {
-      return bot.sendMessage(chatId, "ℹ️ Você ainda não tem assinatura.\nEnvie /planos para escolher um plano e gerar seu Pix.");
-    }
-    if (rec.status === "active") {
-      const rest = rec.expiresAt - Date.now();
-      const vence = new Date(rec.expiresAt).toLocaleString();
+    const u = store.get(chatId); // { active, startTs, endTs, reference }
+    const p = store.getPending(chatId);
+    const now = Date.now();
+
+    if (u && u.active && u.endTs && u.endTs > now) {
+      const rest = u.endTs - now;
+      const vence = new Date(u.endTs).toLocaleString();
       return bot.sendMessage(
         chatId,
-        `✅ *Assinatura ativa*.\nPlano: ${rec.planDays} dias\nVence em: *${vence}* (${formatRemaining(rest)} restantes)`,
+        `✅ *Assinatura ativa*.\nVence em: *${vence}* (${formatRemaining(rest)} restantes)`,
         { parse_mode: "Markdown" }
       );
     }
-    if (rec.status === "pending") {
-      return bot.sendMessage(chatId, "⏳ Seu pagamento está *pendente* de confirmação. Assim que for aprovado, você receberá o link do VIP.", { parse_mode: "Markdown" });
+
+    if (p) {
+      return bot.sendMessage(
+        chatId,
+        "⏳ Seu pagamento está *pendente* de confirmação. Assim que for aprovado, você receberá o link do VIP.",
+        { parse_mode: "Markdown" }
+      );
     }
-    return bot.sendMessage(chatId, "⛔ Sua assinatura *expirou* ou foi *cancelada*. Para continuar, escolha um plano em /planos.", { parse_mode: "Markdown" });
+
+    return bot.sendMessage(
+      chatId,
+      "ℹ️ Você ainda não tem assinatura.\nEnvie /planos para escolher um plano e gerar seu Pix."
+    );
   } catch (e) {
     console.error("Erro no /status:", e);
     bot.sendMessage(chatId, "❌ Não consegui consultar sua assinatura agora. Tente novamente.");
@@ -218,31 +237,43 @@ bot.onText(/\/status/, async (msg) => {
 });
 
 /* =========================================
-   /cancelar
+   /cancelar  (AGORA usando storage.js real)
 ========================================= */
 bot.onText(/\/cancelar|\/cancel/, async (msg) => {
   const chatId = msg.chat.id;
   const groupId = process.env.TELEGRAM_CHANNEL_ID;
   try {
-    const rec = await store.findLatestByChatId(chatId);
-    if (!rec || rec.status !== "active") {
-      return bot.sendMessage(chatId, "ℹ️ Você não possui assinatura *ativa* para cancelar.", { parse_mode: "Markdown" });
+    const u = store.get(chatId);
+    if (!u || !u.active) {
+      return bot.sendMessage(chatId, "ℹ️ Você não possui assinatura *ativa* para cancelar.", {
+        parse_mode: "Markdown",
+      });
     }
 
-    store.cancelByChatId(chatId);
+    // desativa no “banco”
+    store.deactivateByChatId(chatId);
 
+    // Remove do canal/grupo (ban + unban para permitir voltar futuramente)
     if (groupId) {
       try {
-        await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/banChatMember`,
-          { chat_id: groupId, user_id: chatId, revoke_messages: true });
-        await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/unbanChatMember`,
-          { chat_id: groupId, user_id: chatId });
+        await axios.post(
+          `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/banChatMember`,
+          { chat_id: groupId, user_id: chatId, revoke_messages: true }
+        );
+        await axios.post(
+          `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/unbanChatMember`,
+          { chat_id: groupId, user_id: chatId }
+        );
       } catch (e) {
         console.warn("Falha ao remover do canal no cancelamento:", e?.response?.data || e?.message);
       }
     }
 
-    await bot.sendMessage(chatId, "✅ Sua assinatura foi *cancelada* e o acesso ao VIP foi removido.\nSe quiser voltar, é só escolher um plano em /planos.", { parse_mode: "Markdown" });
+    await bot.sendMessage(
+      chatId,
+      "✅ Sua assinatura foi *cancelada* e o acesso ao VIP foi removido.\nSe quiser voltar, é só escolher um plano em /planos.",
+      { parse_mode: "Markdown" }
+    );
   } catch (e) {
     console.error("Erro no /cancelar:", e);
     bot.sendMessage(chatId, "❌ Não consegui cancelar agora. Tente novamente em instantes.");
@@ -261,16 +292,16 @@ bot.on("callback_query", async (query) => {
     const planDays = data.split(":")[1] === "15" ? 15 : 30;
     const amount =
       planDays === 15
-        ? Number(process.env.PLAN_15_PRICE || 5.90)
-        : Number(process.env.PLAN_30_PRICE || 9.90);
+        ? Number(process.env.PLAN_15_PRICE || 5.9)
+        : Number(process.env.PLAN_30_PRICE || 9.9);
 
     const reference = `${chatId}|P${planDays}|${Date.now()}`;
     const expiresAt = Date.now() + planDays * 24 * 60 * 60 * 1000;
 
     const { qr_code, qr_code_base64 } = await gerarPix(amount, reference);
 
-    await store.upsertPending({
-      chatId,
+    // >>> storage.js usa (chatId, data)
+    store.upsertPending(chatId, {
       planDays,
       amount,
       external_reference: reference,
@@ -281,7 +312,9 @@ bot.on("callback_query", async (query) => {
 
     const qrBuffer = Buffer.from(qr_code_base64, "base64");
     await bot.sendPhoto(chatId, qrBuffer, {
-      caption: `📲 Escaneie o QR Code para pagar via Pix.\nPlano: ${planDays} dias (R$ ${amount.toFixed(2)})`,
+      caption: `📲 Escaneie o QR Code para pagar via Pix.\nPlano: ${planDays} dias (R$ ${amount.toFixed(
+        2
+      )})`,
     });
 
     await bot.sendMessage(chatId, "💳 Ou copie e cole este código no seu app bancário:");
@@ -328,7 +361,7 @@ function touchRecipient(chatId) {
 function canSendNow(chatId) {
   const d = readRecipients();
   const last = d.lastPushAt?.[String(chatId)] || 0;
-  return (Date.now() - last) >= MIN_GAP_MS;
+  return Date.now() - last >= MIN_GAP_MS;
 }
 function markPushed(chatId) {
   const d = readRecipients();
@@ -364,7 +397,7 @@ bot.on("message", (msg) => {
 /* =========================================
    BROADCAST DIÁRIO (12:30 nudge, 18h TARDE, 22h NOITE) + cooldown
 ========================================= */
-const DOW = ["DOMINGO","SEGUNDA","TERÇA","QUARTA","QUINTA","SEXTA","SABADO"];
+const DOW = ["DOMINGO", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SABADO"];
 
 function mediaPathFor(dayName, period /* "TARDE"|"NOITE" */) {
   return path.join(__dirname, "media", `${dayName} ${period}.mp4`);
@@ -392,7 +425,7 @@ async function broadcastFile(filePath, caption) {
   const { chat_ids } = readRecipients();
   if (!chat_ids.length) return;
   for (const id of chat_ids) {
-    if (!canSendNow(id)) continue; // respeita cooldown 3h
+    if (!canSendNow(id)) continue; // respeita cooldown
     try {
       await bot.sendVideo(id, fs.createReadStream(filePath), {
         caption,
@@ -402,7 +435,7 @@ async function broadcastFile(filePath, caption) {
     } catch (e) {
       console.warn("Falha ao enviar para", id, e?.response?.data || e?.message);
     }
-    await new Promise(r => setTimeout(r, 350)); // rate limit básico
+    await new Promise((r) => setTimeout(r, 350)); // rate limit básico
   }
 }
 
@@ -423,16 +456,14 @@ async function runScheduled(period /* "TARDE"|"NOITE" */) {
 async function nudgeStartMidday() {
   const { chat_ids } = readRecipients();
   for (const id of chat_ids) {
-    // filtro de status
     let pode = true;
     try {
-      const rec = await store.findLatestByChatId(id);
-      if (rec) {
-        if (rec.status === "active") pode = false;
-        if (rec.status === "pending") {
-          const age = Date.now() - (rec.createdAt || Date.now());
-          if (age < 6 * 60 * 60 * 1000) pode = false;
-        }
+      const u = store.get(id);
+      const p = store.getPending(id);
+      if (u && u.active && u.endTs && u.endTs > Date.now()) pode = false;
+      if (p) {
+        const age = Date.now() - (p.createdAt || Date.now());
+        if (age < 6 * 60 * 60 * 1000) pode = false;
       }
     } catch {}
     if (!pode) continue;
@@ -444,28 +475,30 @@ async function nudgeStartMidday() {
     } catch (e) {
       console.warn("Falha ao enviar /start 12:30 para", id, e?.response?.data || e?.message);
     }
-    await new Promise(r => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 350));
   }
 }
 
 // Agendas (timezone Brasil)
 const tz = process.env.TZ || "America/Sao_Paulo";
 cron.schedule("30 12 * * *", () => nudgeStartMidday(), { timezone: tz }); // 12:30
-cron.schedule("0 18 * * *",  () => runScheduled("TARDE"), { timezone: tz }); // 18:00
-cron.schedule("0 22 * * *",  () => runScheduled("NOITE"), { timezone: tz }); // 22:00
+cron.schedule("0 18 * * *", () => runScheduled("TARDE"), { timezone: tz }); // 18:00
+cron.schedule("0 22 * * *", () => runScheduled("NOITE"), { timezone: tz }); // 22:00
 
 /* =========================================
    Comandos manuais de teste (e /tz)
 ========================================= */
-bot.onText(/^\/test_1230$/, async (msg) => { await nudgeStartMidday(); });
-bot.onText(/^\/test_1800$/, async (msg) => { await runScheduled("TARDE"); });
-bot.onText(/^\/test_2200$/, async (msg) => { await runScheduled("NOITE"); });
-
+bot.onText(/^\/test_1230$/, async (msg) => {
+  await nudgeStartMidday();
+});
+bot.onText(/^\/test_1800$/, async (msg) => {
+  await runScheduled("TARDE");
+});
+bot.onText(/^\/test_2200$/, async (msg) => {
+  await runScheduled("NOITE");
+});
 bot.onText(/^\/tz$/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    `TZ=${process.env.TZ || 'UNSET'}\nnow=${new Date().toString()}`
-  );
+  bot.sendMessage(msg.chat.id, `TZ=${process.env.TZ || "UNSET"}\nnow=${new Date().toString()}`);
 });
 
 module.exports = bot;
