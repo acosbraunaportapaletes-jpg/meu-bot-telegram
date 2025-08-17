@@ -11,6 +11,9 @@ const cron = require("node-cron");
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
+// loga fuso/horário no boot (confira nos Logs do Render)
+console.log(`[Boot] TZ=${process.env.TZ || 'UNSET'} | now=${new Date().toString()}`);
+
 // ===== Cooldown (respiro) por usuário: default 3h, pode mudar com env MIN_GAP_MS =====
 const MIN_GAP_MS = Number(process.env.MIN_GAP_MS || 3 * 60 * 60 * 1000);
 
@@ -302,7 +305,6 @@ const RECIP_PATH = path.join(__dirname, "recipients.json");
 function readRecipients() {
   try {
     const d = JSON.parse(fs.readFileSync(RECIP_PATH, "utf-8"));
-    // compat versões antigas (lastStartAt) -> lastPushAt
     const lastPushAt = d.lastPushAt || d.lastStartAt || {};
     return { chat_ids: d.chat_ids || [], lastPushAt };
   } catch {
@@ -452,9 +454,18 @@ cron.schedule("30 12 * * *", () => nudgeStartMidday(), { timezone: tz }); // 12:
 cron.schedule("0 18 * * *",  () => runScheduled("TARDE"), { timezone: tz }); // 18:00
 cron.schedule("0 22 * * *",  () => runScheduled("NOITE"), { timezone: tz }); // 22:00
 
-// Comandos manuais de teste
+/* =========================================
+   Comandos manuais de teste (e /tz)
+========================================= */
 bot.onText(/^\/test_1230$/, async (msg) => { await nudgeStartMidday(); });
 bot.onText(/^\/test_1800$/, async (msg) => { await runScheduled("TARDE"); });
 bot.onText(/^\/test_2200$/, async (msg) => { await runScheduled("NOITE"); });
+
+bot.onText(/^\/tz$/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    `TZ=${process.env.TZ || 'UNSET'}\nnow=${new Date().toString()}`
+  );
+});
 
 module.exports = bot;
