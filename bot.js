@@ -11,6 +11,16 @@ const store = require("./storage");
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 /* =========================================
+   IMAGEM DO /start
+   Usa media/picture.png (repo) com legenda opcional START_IMAGE_CAPTION
+========================================= */
+const START_IMAGE_PATH = path.join(__dirname, "media", "picture.png");
+const HAS_START_IMAGE = fs.existsSync(START_IMAGE_PATH);
+const START_IMAGE_CAPTION =
+  process.env.START_IMAGE_CAPTION ||
+  "🔥 Acesso VIP — pague no Pix e receba o link automaticamente!";
+
+/* =========================================
    Comandos de menu ("/")
 ========================================= */
 (async () => {
@@ -111,10 +121,21 @@ function resolveStartVideo() {
   return fs.createReadStream(abs);
 }
 
-async function sendStart(chatId) {
+async function sendStart(chatId, { withImage = false } = {}) {
   try {
-    const videoInput = resolveStartVideo();
+    // 0) Envia a IMAGEM do banner se solicitado (apenas no /start)
+    if (withImage && HAS_START_IMAGE) {
+      try {
+        await bot.sendPhoto(chatId, START_IMAGE_PATH, {
+          caption: START_IMAGE_CAPTION,
+        });
+      } catch (e) {
+        console.warn("Falha ao enviar imagem do /start:", e?.response?.data || e?.message);
+      }
+    }
 
+    // 1) Vídeo de introdução (opcional)
+    const videoInput = resolveStartVideo();
     if (videoInput) {
       if (typeof videoInput === "object" && videoInput.missing) {
         await bot.sendMessage(
@@ -132,6 +153,7 @@ async function sendStart(chatId) {
       }
     }
 
+    // 2) Mensagem com planos
     await bot.sendMessage(chatId, startMessage(), {
       reply_markup: planKeyboard(),
       parse_mode: "Markdown",
@@ -144,8 +166,11 @@ async function sendStart(chatId) {
 
 /* =========================================
    Handlers básicos
+   -> /start envia IMAGEM + vídeo + mensagem
+   -> /planos envia apenas vídeo + mensagem (sem imagem)
 ========================================= */
-bot.onText(/\/start|\/planos/, (msg) => sendStart(msg.chat.id));
+bot.onText(/\/start$/, (msg) => sendStart(msg.chat.id, { withImage: true }));
+bot.onText(/\/planos$/, (msg) => sendStart(msg.chat.id, { withImage: false }));
 
 bot.onText(/\/videotest/, async (msg) => {
   const chatId = msg.chat.id;
