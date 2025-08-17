@@ -11,6 +11,9 @@ const cron = require("node-cron");
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
+// ===== Cooldown (respiro) por usuário: default 3h, pode mudar com env MIN_GAP_MS =====
+const MIN_GAP_MS = Number(process.env.MIN_GAP_MS || 3 * 60 * 60 * 1000);
+
 /* =========================================
    IMAGEM DO /start
 ========================================= */
@@ -293,17 +296,25 @@ bot.on("callback_query", async (query) => {
 });
 
 /* =========================================
-   /idcanal + detector de forward de canal
-   + Captura de recipients para broadcast
+   recipients.json helpers (com cooldown por usuário)
 ========================================= */
 const RECIP_PATH = path.join(__dirname, "recipients.json");
 function readRecipients() {
-  try { return JSON.parse(fs.readFileSync(RECIP_PATH, "utf-8")); }
-  catch { return { chat_ids: [] }; }
+  try {
+    const d = JSON.parse(fs.readFileSync(RECIP_PATH, "utf-8"));
+    // compat versões antigas (lastStartAt) -> lastPushAt
+    const lastPushAt = d.lastPushAt || d.lastStartAt || {};
+    return { chat_ids: d.chat_ids || [], lastPushAt };
+  } catch {
+    return { chat_ids: [], lastPushAt: {} };
+  }
 }
 function saveRecipients(data) {
   const uniq = [...new Set(data.chat_ids)];
-  fs.writeFileSync(RECIP_PATH, JSON.stringify({ chat_ids: uniq }, null, 2));
+  fs.writeFileSync(
+    RECIP_PATH,
+    JSON.stringify({ chat_ids: uniq, lastPushAt: data.lastPushAt || {} }, null, 2)
+  );
 }
 function touchRecipient(chatId) {
   const data = readRecipients();
@@ -312,7 +323,21 @@ function touchRecipient(chatId) {
     saveRecipients(data);
   }
 }
+function canSendNow(chatId) {
+  const d = readRecipients();
+  const last = d.lastPushAt?.[String(chatId)] || 0;
+  return (Date.now() - last) >= MIN_GAP_MS;
+}
+function markPushed(chatId) {
+  const d = readRecipients();
+  d.lastPushAt[String(chatId)] = Date.now();
+  saveRecipients(d);
+}
 
+/* =========================================
+   /idcanal + detector de forward de canal
+   + captura recipients
+========================================= */
 bot.onText(/\/idcanal/, async (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -335,15 +360,15 @@ bot.on("message", (msg) => {
 });
 
 /* =========================================
-   BROADCAST DIÁRIO (18h TARDE, 22h NOITE)
+   BROADCAST DIÁRIO (12:30 nudge, 18h TARDE, 22h NOITE) + cooldown
 ========================================= */
 const DOW = ["DOMINGO","SEGUNDA","TERÇA","QUARTA","QUINTA","SEXTA","SABADO"];
 
 function mediaPathFor(dayName, period /* "TARDE"|"NOITE" */) {
-  // Usa exatamente os nomes dos arquivos no repo:
   return path.join(__dirname, "media", `${dayName} ${period}.mp4`);
 }
 
+// Legendas +18 neutras/consensuais; personalize se quiser
 const CAPTIONS = {
   "SEGUNDA_TARDE": "🎬 Segunda 18h — Teaser VIP do dia: Tia deixou os pr1mos sozinhos e eles não se aguentaram se pegaram no banho sem cam1s1nha. 😉",
   "SEGUNDA_NOITE": "🌙 Segunda 22h — T1o viu sobr1nha se tr0cando e não se aguentou. 🔥",
@@ -365,11 +390,13 @@ async function broadcastFile(filePath, caption) {
   const { chat_ids } = readRecipients();
   if (!chat_ids.length) return;
   for (const id of chat_ids) {
+    if (!canSendNow(id)) continue; // respeita cooldown 3h
     try {
       await bot.sendVideo(id, fs.createReadStream(filePath), {
         caption,
         supports_streaming: true,
       });
+      markPushed(id);
     } catch (e) {
       console.warn("Falha ao enviar para", id, e?.response?.data || e?.message);
     }
@@ -390,13 +417,44 @@ async function runScheduled(period /* "TARDE"|"NOITE" */) {
   await broadcastFile(file, caption);
 }
 
+// Nudge 12:30: manda /start só para não-ativos (pending <6h pula) + cooldown
+async function nudgeStartMidday() {
+  const { chat_ids } = readRecipients();
+  for (const id of chat_ids) {
+    // filtro de status
+    let pode = true;
+    try {
+      const rec = await store.findLatestByChatId(id);
+      if (rec) {
+        if (rec.status === "active") pode = false;
+        if (rec.status === "pending") {
+          const age = Date.now() - (rec.createdAt || Date.now());
+          if (age < 6 * 60 * 60 * 1000) pode = false;
+        }
+      }
+    } catch {}
+    if (!pode) continue;
+    if (!canSendNow(id)) continue;
+
+    try {
+      await sendStart(id, { withImage: true }); // vídeo -> imagem -> texto
+      markPushed(id);
+    } catch (e) {
+      console.warn("Falha ao enviar /start 12:30 para", id, e?.response?.data || e?.message);
+    }
+    await new Promise(r => setTimeout(r, 350));
+  }
+}
+
 // Agendas (timezone Brasil)
 const tz = process.env.TZ || "America/Sao_Paulo";
-cron.schedule("0 18 * * *", () => runScheduled("TARDE"), { timezone: tz });
-cron.schedule("0 22 * * *", () => runScheduled("NOITE"), { timezone: tz });
+cron.schedule("30 12 * * *", () => nudgeStartMidday(), { timezone: tz }); // 12:30
+cron.schedule("0 18 * * *",  () => runScheduled("TARDE"), { timezone: tz }); // 18:00
+cron.schedule("0 22 * * *",  () => runScheduled("NOITE"), { timezone: tz }); // 22:00
 
 // Comandos manuais de teste
-bot.onText(/^\/broadcast_tarde$/, async (msg) => { if (msg.chat.id) await runScheduled("TARDE"); });
-bot.onText(/^\/broadcast_noite$/, async (msg) => { if (msg.chat.id) await runScheduled("NOITE"); });
+bot.onText(/^\/test_1230$/, async (msg) => { await nudgeStartMidday(); });
+bot.onText(/^\/test_1800$/, async (msg) => { await runScheduled("TARDE"); });
+bot.onText(/^\/test_2200$/, async (msg) => { await runScheduled("NOITE"); });
 
 module.exports = bot;
